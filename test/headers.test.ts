@@ -26,6 +26,9 @@ describe("headers", () => {
 		);
 		assert.equal(first.model.baseUrl, "https://cli-chat-proxy.grok.com/v1");
 		assert.equal(first.model.api, "openai-responses");
+		assert.equal(first.model.compat?.connectionBoundNativeHistory, false);
+		assert.equal(first.model.compat?.thinkingLoopGuard, "xai");
+		assert.equal(first.model.compat?.promptCacheSessionHeader, "x-grok-conv-id");
 		assert.equal(first.wire, "openai-responses");
 		const headers = lowerHeaders(first.headers);
 		assert.equal(headers["x-xai-token-auth"], "xai-grok-cli");

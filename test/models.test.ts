@@ -22,6 +22,14 @@ describe("model metadata", () => {
 		assert.deepEqual(model.thinking?.efforts, ["low", "medium", "high", "xhigh"]);
 		assert.equal(model.thinking?.defaultLevel, "high");
 		assert.equal(model.compat.supportsReasoningEffort, true);
+		assert.equal(model.compat.connectionBoundNativeHistory, false);
+		assert.equal(model.compat.supportsReasoningSummary, false);
+		assert.equal(model.compat.rejectRootObjectUnion, true);
+		assert.equal(model.compat.supportsPenaltyAndStopParams, false);
+		assert.equal(model.compat.thinkingLoopGuard, "xai");
+		assert.equal(model.compat.promptCacheSessionHeader, "x-grok-conv-id");
+		assert.equal(model.compat.omitReasoningEffort, false);
+		assert.deepEqual(model.compat.reasoningEffortMap, { minimal: "low" });
 	});
 
 	it("does not copy the 128k / no-thinking / no-image / max-equals-context fallback onto a 4.7 variant", () => {
@@ -30,6 +38,9 @@ describe("model metadata", () => {
 		assert.equal(model.maxTokens, 128_000);
 		assert.ok(model.input.includes("image"));
 		assert.deepEqual(model.thinking?.efforts, ["low", "medium", "high", "xhigh"]);
+		assert.equal(toProviderModel(mergeModel("grok-4.5")).compat.reasoningEffortMap.xhigh, "high");
+		assert.equal(toProviderModel(mergeModel("grok-build")).compat.omitReasoningEffort, true);
+		assert.equal(toProviderModel(mergeModel("grok-build")).cost.input, 0);
 	});
 
 	it("uses conservative defaults for an unknown id", () => {
@@ -41,6 +52,8 @@ describe("model metadata", () => {
 		assert.equal(model.reasoning, false);
 		assert.equal(model.thinking, undefined);
 		assert.equal(model.compat.supportsReasoningEffort, false);
+		assert.equal(model.compat.omitReasoningEffort, true);
+		assert.equal(model.compat.connectionBoundNativeHistory, false);
 	});
 
 	it("prefers metadata the server actually returns", () => {
@@ -67,12 +80,15 @@ describe("model metadata", () => {
 		);
 		assert.equal(explicitEqual.maxTokens, 32_000);
 
-		const contextOnly = toProviderModel(
-			mergeModel("grok-4.7", { context_window: 128_000 }),
+		const genericWindow = toProviderModel(
+			mergeModel("grok-4.7", { context_window: 128_000, context_length: 256_000, reasoning_effort: "high" }),
 		);
-		assert.equal(contextOnly.contextWindow, 128_000);
-		assert.ok(contextOnly.maxTokens < contextOnly.contextWindow);
-		assert.ok(contextOnly.input.includes("image"));
+		assert.equal(genericWindow.contextWindow, 500_000);
+		assert.deepEqual(genericWindow.thinking?.efforts, ["low", "medium", "high", "xhigh"]);
+		assert.ok(genericWindow.input.includes("image"));
+
+		const bareMaxTokens = toProviderModel(mergeModel("grok-4.7", { max_tokens: 256_000 }));
+		assert.equal(bareMaxTokens.maxTokens, 128_000);
 	});
 
 	it("keeps chat models from a live list and drops non-chat ids", () => {
@@ -86,7 +102,7 @@ describe("model metadata", () => {
 		]);
 		assert.deepEqual(
 			models.map(model => model.id),
-			["grok-4.7", "grok-composer-2.5-fast"],
+			seedModels().map(model => model.id),
 		);
 		const grok = models[0];
 		assert.equal(grok?.contextWindow, 500_000);
@@ -127,6 +143,28 @@ describe("model metadata", () => {
 		assert.equal(unknown?.maxTokens, 16_384);
 		assert.deepEqual(unknown?.input, ["text"]);
 		assert.equal(unknown?.reasoning, false);
+		assert.equal(live.some(model => model.id === "grok-4.3"), true);
+		assert.equal(live.find(model => model.id === "grok-4.7")?.compat.connectionBoundNativeHistory, false);
+
+		const generic = await discoverModels(access, async () =>
+			jsonResponse({
+				data: ["grok-4.5", "grok-4.6", "grok-4.7", "grok-4.7-build-fast"].map(id => ({
+					id,
+					context_window: 256_000,
+					max_output_tokens: 128_000,
+					reasoning_effort: "high",
+					reasoning_efforts: ["high"],
+					input_modalities: ["text", "image"],
+				})),
+			}),
+		);
+		const grok47 = generic.find(model => model.id === "grok-4.7");
+		assert.equal(grok47?.contextWindow, 500_000);
+		assert.deepEqual(grok47?.thinking?.efforts, ["low", "medium", "high", "xhigh"]);
+		assert.equal(generic.some(model => model.id === "grok-4.3"), true);
+		const fast = generic.find(model => model.id === "grok-4.7-build-fast");
+		assert.equal(fast?.cost.input, 4);
+		assert.equal(fast?.cost.output, 12);
 
 		const fallback = await discoverModels(access, async () => jsonResponse({ error: "no" }, 503));
 		assert.equal(fallback.some(model => model.id === "grok-4.6"), true);

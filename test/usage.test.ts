@@ -35,6 +35,8 @@ describe("usage", () => {
 		assert.equal(report.limits[0]?.window?.label, "Weekly");
 		assert.equal(report.limits[1]?.label, "Grok Build");
 		assert.equal(report.metadata?.accountId, "acct-a");
+		assert.equal(grokBuildUsageProvider.cacheVersion, 2);
+		assert.equal(typeof grokBuildUsageProvider.cacheVersion, "number");
 
 		let url = "";
 		const fetched = await fetchGrokBuildUsage({

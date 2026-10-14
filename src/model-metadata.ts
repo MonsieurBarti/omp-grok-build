@@ -1,8 +1,13 @@
 /**
  * Maintained Grok Build model metadata.
  *
- * Live `/v1/models` rows override any field they actually carry
- * (see src/models.ts). Edit this table when a capture or the docs change.
+ * Live `/v1/models` updates a row only when the field is a real per-model
+ * value (see src/models.ts). A generic 256k window or `reasoning_effort: "high"`
+ * does not replace this table. Edit the table when a capture or the docs change.
+ *
+ * Prices are the public list rates (docs.x.ai / the CLI catalog). Prompts at
+ * or above 200k input tokens are billed at 2x on the API. `grok-build` is the
+ * included SKU and stays at 0. The picker shows the base rate.
  *
  * Sources, as of 2026-10-14:
  * - grok-4.5 / 4.6 / 4.7 context, images, and reasoning efforts: docs.x.ai.

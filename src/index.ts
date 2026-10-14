@@ -2,6 +2,7 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 
 import { PROVIDER_ID } from "./constants.ts";
+import { debugStatusText } from "./debug.ts";
 import { createGrokBuildProviderConfig } from "./provider.ts";
 import type { Transports } from "./stream.ts";
 import { fetchGrokBuildUsage } from "./usage.ts";
@@ -54,16 +55,24 @@ export default async function grokBuildExtension(pi: ExtensionApi): Promise<void
 				[
 					"Grok Build",
 					"",
-					"  /login   → Grok Build",
+					"  /login   → Grok Build (browser PKCE; device or import are alternatives)",
 					"  /logout  → Grok Build",
 					"  /model grok-build/grok-4.7",
 					"  /usage   → weekly Build credits",
+					"  /grok-build-debug",
 					"",
 					"Chat goes to cli-chat-proxy.grok.com.",
 					"XAI_API_KEY and api.x.ai are not used.",
 				].join("\n"),
 				"info",
 			);
+		},
+	});
+
+	pi.registerCommand("grok-build-debug", {
+		description: "Show GROK_BUILD_DEBUG and the last redacted /v1/models summary",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify(debugStatusText(), "info");
 		},
 	});
 }

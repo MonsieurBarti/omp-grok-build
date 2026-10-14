@@ -7,6 +7,7 @@ import {
 	type ThinkingMeta,
 	type WireApi,
 } from "./model-metadata.ts";
+import { responsesCompatFor, type ResponsesCompat } from "./wire-compat.ts";
 
 export interface ServerModel {
 	id?: unknown;
@@ -48,27 +49,24 @@ export interface ProviderModel {
 	contextWindow: number;
 	maxTokens: number;
 	headers: Record<string, string>;
-	compat: {
-		supportsReasoningEffort: boolean;
-		reasoningEffortMap?: Record<string, string>;
-		promptCacheSessionHeader: string;
-	};
+	compat: ResponsesCompat;
 }
 
 const wireById = new Map<string, WireApi>();
 
 const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-const CONTEXT_KEYS = [
-	"context_window",
-	"context_length",
-	"max_context_length",
-	"max_model_len",
-	"contextWindow",
-] as const;
+/**
+ * Windows the CLI proxy stamps on every row when it has no per-model limit.
+ * 256000 is the grok-4 / grok-build-0.1 generic window, not grok-4.7's 500k.
+ */
+const GENERIC_CONTEXT_WINDOWS = new Set([128_000, 131_072, 256_000, 262_144]);
 
-/** Prefer explicit output fields. Bare `max_tokens` is often the context window. */
-const OUTPUT_KEYS = ["max_output_tokens", "max_completion_tokens", "maxTokens"] as const;
+/** Explicit per-model context. `context_length` / `max_model_len` are generic server fields. */
+const CONTEXT_KEYS = ["context_window", "contextWindow"] as const;
+
+/** Explicit output budget. Bare `max_tokens` is often the context window. */
+const OUTPUT_KEYS = ["max_output_tokens", "max_completion_tokens"] as const;
 
 const EXCLUDE_ID =
 	/(?:^|[-_/])(image|images|imagine|flux|tts|stt|whisper|embed|embedding|video|voice|realtime|audio|speech|transcrib|moderation)(?:$|[-_/])/i;
@@ -173,12 +171,29 @@ function readImages(row: ServerModel): boolean | undefined {
 	return modalities.some(item => /image|vision/.test(item));
 }
 
+/**
+ * A real ladder is `reasoning_efforts` with two or more levels.
+ * A singular `reasoning_effort: "high"` is the default level, not the ladder.
+ */
 function readEfforts(row: ServerModel): string[] | undefined {
-	const listed = stringList(row.reasoning_efforts) ?? stringList(row.reasoning_effort);
-	if (!listed) return undefined;
-	const allowed = new Set<string>(EFFORT_ORDER);
-	const picked = EFFORT_ORDER.filter(effort => listed.includes(effort) && allowed.has(effort));
-	return picked;
+	if (!Array.isArray(row.reasoning_efforts) || row.reasoning_efforts.length < 2) return undefined;
+	const listed = stringList(row.reasoning_efforts);
+	if (!listed || listed.length < 2) return undefined;
+	const picked = EFFORT_ORDER.filter(effort => listed.includes(effort));
+	return picked.length >= 2 ? [...picked] : undefined;
+}
+
+function isCuratedId(id: string): boolean {
+	if (METADATA_BY_ID.has(id)) return true;
+	const normalized = id.toLowerCase();
+	if (normalized.includes("non-reasoning") && normalized.startsWith("grok-4.20")) return true;
+	return FAMILY_PREFIXES.some(family => normalized.startsWith(family.prefix));
+}
+
+function ignoreServerContext(base: ModelMetadata, context: number, uniformContext: number | undefined): boolean {
+	if (!isCuratedId(base.id) || context === base.contextWindow) return false;
+	if (GENERIC_CONTEXT_WINDOWS.has(context)) return true;
+	return uniformContext !== undefined && context === uniformContext;
 }
 
 function readWire(row: ServerModel): WireApi | undefined {
@@ -204,11 +219,17 @@ function readWire(row: ServerModel): WireApi | undefined {
 	return undefined;
 }
 
-function applyServer(base: ModelMetadata, row: ServerModel | undefined): ModelMetadata {
+function applyServer(
+	base: ModelMetadata,
+	row: ServerModel | undefined,
+	options?: { uniformContext?: number },
+): ModelMetadata {
 	if (!row) return base;
 	const context = firstPositive(row, CONTEXT_KEYS);
 	const explicitOutput = firstPositive(row, OUTPUT_KEYS);
-	if (context !== undefined) base.contextWindow = context;
+	if (context !== undefined && !ignoreServerContext(base, context, options?.uniformContext)) {
+		base.contextWindow = context;
+	}
 	if (explicitOutput !== undefined) {
 		base.maxTokens = explicitOutput;
 	} else if (base.maxTokens >= base.contextWindow) {
@@ -272,6 +293,17 @@ export function mergeModel(id: string, server?: ServerModel): ModelMetadata {
 	return applyServer(baseMetadata(bareModelId(id)), server);
 }
 
+function sharedContext(rows: readonly ServerModel[]): number | undefined {
+	if (rows.length === 0) return undefined;
+	const values: number[] = [];
+	for (const row of rows) {
+		const value = firstPositive(row, CONTEXT_KEYS);
+		if (value === undefined) return undefined;
+		values.push(value);
+	}
+	return values.every(value => value === values[0]) ? values[0] : undefined;
+}
+
 export function toProviderModel(meta: ModelMetadata): ProviderModel {
 	const thinking =
 		meta.reasoning && meta.supportsReasoningEffort ? cloneThinking(meta.thinking) : undefined;
@@ -286,11 +318,10 @@ export function toProviderModel(meta: ModelMetadata): ProviderModel {
 		contextWindow: meta.contextWindow,
 		maxTokens: meta.maxTokens,
 		headers: { "x-grok-model-override": meta.id },
-		compat: {
+		compat: responsesCompatFor(meta.id, {
 			supportsReasoningEffort: meta.supportsReasoningEffort,
 			...(meta.reasoningEffortMap ? { reasoningEffortMap: { ...meta.reasoningEffortMap } } : {}),
-			promptCacheSessionHeader: "x-grok-conv-id",
-		},
+		}),
 	};
 }
 
@@ -312,16 +343,28 @@ export function isExcludedServerModel(row: ServerModel): boolean {
 	return false;
 }
 
+/**
+ * Curated rows stay in the picker. Live ids update a matching row and append
+ * ids the table does not know. A proxy that returns four generic 256k rows
+ * does not drop grok-4.3 or replace grok-4.7's 500k window.
+ */
 export function mergeServerModels(rows: readonly ServerModel[]): ProviderModel[] {
-	const merged: ModelMetadata[] = [];
+	const chat = rows.filter(row => !isExcludedServerModel(row));
+	const uniformContext = sharedContext(chat);
+	const byId = new Map<string, ModelMetadata>();
+	for (const model of MODEL_METADATA) byId.set(model.id, cloneMeta(model, model.id));
+	const extras: string[] = [];
 	const seen = new Set<string>();
-	for (const row of rows) {
-		if (isExcludedServerModel(row)) continue;
+	for (const row of chat) {
 		const id = bareModelId(String(row.id));
 		if (seen.has(id)) continue;
 		seen.add(id);
-		merged.push(mergeModel(id, row));
+		const base = byId.get(id) ?? baseMetadata(id);
+		const next = applyServer(base, row, { uniformContext });
+		if (!byId.has(id)) extras.push(id);
+		byId.set(id, next);
 	}
+	const merged = [...MODEL_METADATA.map(model => byId.get(model.id)!), ...extras.map(id => byId.get(id)!)];
 	rememberWire(merged);
 	return merged.map(toProviderModel);
 }

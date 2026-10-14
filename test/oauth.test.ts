@@ -276,7 +276,8 @@ describe("oauth", () => {
 	});
 
 	it("parses redirect URLs and bare codes", () => {
-		assert.equal(normalizeLoginMethod(""), "device");
+		assert.equal(normalizeLoginMethod(""), "pkce");
+		assert.equal(normalizeLoginMethod("device"), "device");
 		assert.equal(normalizeLoginMethod("PKCE"), "pkce");
 		assert.equal(normalizeLoginMethod("import"), "import");
 		assert.deepEqual(parseCallbackInput("https://auth.x.ai/done?code=abc&state=s"), {

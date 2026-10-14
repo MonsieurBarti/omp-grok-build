@@ -180,10 +180,10 @@ export function refreshTokenBody(refreshToken: string): URLSearchParams {
 
 export function normalizeLoginMethod(raw: string | undefined): LoginMethod {
 	const value = (raw ?? "").trim().toLowerCase();
-	if (value === "" || value === "device" || value === "d" || value === "1") return "device";
-	if (value === "pkce" || value === "browser" || value === "web" || value === "2") return "pkce";
+	if (value === "" || value === "pkce" || value === "browser" || value === "web" || value === "2") return "pkce";
+	if (value === "device" || value === "d" || value === "1") return "device";
 	if (value === "import" || value === "cli" || value === "3") return "import";
-	throw new Error('Grok Build login method must be "device", "pkce", or "import"');
+	throw new Error('Grok Build login method must be "pkce", "device", or "import"');
 }
 
 export function parseCallbackInput(input: string): { code?: string; state?: string; error?: string } | undefined {
@@ -368,8 +368,8 @@ export async function loginGrokBuild(
 	options: { sleep?: (ms: number, signal?: AbortSignal) => Promise<void>; authPath?: string; now?: () => number } = {},
 ): Promise<OAuthCredentials> {
 	const choice = await callbacks.onPrompt({
-		message: "Grok Build login: device (device code), pkce (browser), or import (~/.grok/auth.json)",
-		placeholder: "device",
+		message: "Grok Build login: pkce (browser, default), device (device code), or import (~/.grok/auth.json)",
+		placeholder: "pkce",
 		allowEmpty: true,
 	});
 	const method = normalizeLoginMethod(choice);

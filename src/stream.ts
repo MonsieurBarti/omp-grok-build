@@ -1,12 +1,20 @@
 import { randomUUID } from "node:crypto";
 
+import { armAbort } from "./abort-timer.ts";
 import { assertBuildBaseUrl, assertOAuthAccessToken } from "./auth-guard.ts";
 import { GROK_BUILD_API, GROK_BUILD_BASE_URL, PROVIDER_ID } from "./constants.ts";
+import { debugLog, redactHeaders } from "./debug.ts";
 import { buildChatHeaders, type HeaderBuildContext } from "./headers.ts";
 import { wireFor, bareModelId } from "./models.ts";
 import { CLI_FINGERPRINT } from "./fingerprint.ts";
 import { agentIdFor, conversationIdFor, countUserTurns, nextTurnIndex, resolveSessionId } from "./session.ts";
 import type { WireApi } from "./model-metadata.ts";
+import {
+	REQUEST_TIMEOUT_MS,
+	STREAM_FIRST_EVENT_TIMEOUT_MS,
+	STREAM_IDLE_TIMEOUT_MS,
+	compatForTransport,
+} from "./wire-compat.ts";
 
 export interface StreamModel {
 	id: string;
@@ -69,6 +77,13 @@ export function prepareGrokBuildCall(
 			...(options?.headers ?? {}),
 		},
 	});
+	const compat = compatForTransport({ ...model, id: modelId });
+	try {
+		model.compat = compat;
+	} catch {
+		// A frozen registry row still gets compat on the object passed to the transport.
+	}
+	debugLog("POST /v1/responses headers", redactHeaders(headers));
 	return {
 		wire,
 		headers,
@@ -80,6 +95,7 @@ export function prepareGrokBuildCall(
 			api: wire,
 			baseUrl,
 			headers,
+			compat,
 		},
 		options: {
 			...options,
@@ -87,8 +103,36 @@ export function prepareGrokBuildCall(
 			sessionId,
 			promptCacheKey: sessionId,
 			headers,
+			streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs ?? STREAM_FIRST_EVENT_TIMEOUT_MS,
+			streamIdleTimeoutMs: options?.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
 		},
 	};
+}
+
+export function requestTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = env.GROK_BUILD_TIMEOUT_MS;
+	if (raw === undefined || raw.trim() === "") return REQUEST_TIMEOUT_MS;
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 0) return REQUEST_TIMEOUT_MS;
+	return Math.floor(parsed);
+}
+
+function timeoutReason(ms: number): Error {
+	const label = ms >= 1000 ? `${Math.round(ms / 1000)}s` : `${ms}ms`;
+	return new Error(
+		`grok-build request to cli-chat-proxy.grok.com timed out after ${label}. Set GROK_BUILD_TIMEOUT_MS to wait longer.`,
+	);
+}
+
+function releaseWhenSettled(stream: unknown, cancel: () => void): void {
+	if (typeof stream === "object" && stream !== null && "finalResultPromise" in stream) {
+		const promise = (stream as { finalResultPromise?: unknown }).finalResultPromise;
+		if (promise instanceof Promise) {
+			void promise.finally(cancel).catch(() => {});
+			return;
+		}
+	}
+	cancel();
 }
 
 export type WireTransport = (
@@ -114,7 +158,19 @@ export function streamGrokBuild(
 	if (typeof transport !== "function") {
 		throw new Error(`grok-build has no ${prepared.wire} transport`);
 	}
-	return transport(prepared.model, prepared.context, prepared.options);
+	const timeoutMs = requestTimeoutMs();
+	const armed =
+		timeoutMs > 0 ? armAbort(timeoutMs, prepared.options.signal, timeoutReason(timeoutMs)) : undefined;
+	if (armed) prepared.options = { ...prepared.options, signal: armed.signal };
+	let stream: unknown;
+	try {
+		stream = transport(prepared.model, prepared.context, prepared.options);
+	} catch (error) {
+		armed?.cancel();
+		throw error;
+	}
+	if (armed) releaseWhenSettled(stream, armed.cancel);
+	return stream;
 }
 
 export const STREAM_API = GROK_BUILD_API;

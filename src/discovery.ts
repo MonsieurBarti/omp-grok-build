@@ -1,5 +1,6 @@
 import { MODELS_URL } from "./constants.ts";
 import { assertBuildBaseUrl, assertOAuthAccessToken } from "./auth-guard.ts";
+import { debugLog, redactHeaders, rememberModelsPayload } from "./debug.ts";
 import { buildStaticHeaders, type HeaderBuildContext } from "./headers.ts";
 import {
 	mergeServerModels,
@@ -18,15 +19,17 @@ export async function discoverModels(
 	if (!apiKey?.trim()) return seedModels();
 	const access = assertOAuthAccessToken(apiKey);
 	assertBuildBaseUrl(MODELS_URL);
+	const headers = {
+		...buildStaticHeaders(headerCtx),
+		Authorization: `Bearer ${access}`,
+		Accept: "application/json",
+	};
+	debugLog("GET /v1/models request", { url: MODELS_URL, headers: redactHeaders(headers) });
 	let response: Response;
 	try {
 		response = await fetchImpl(MODELS_URL, {
 			method: "GET",
-			headers: {
-				...buildStaticHeaders(headerCtx),
-				Authorization: `Bearer ${access}`,
-				Accept: "application/json",
-			},
+			headers,
 			signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
 		});
 	} catch {
@@ -39,6 +42,7 @@ export async function discoverModels(
 	} catch {
 		return seedModels();
 	}
+	rememberModelsPayload(payload);
 	const rows = parseModelListPayload(payload);
 	if (rows.length === 0) return seedModels();
 	const merged = mergeServerModels(rows);

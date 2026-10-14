@@ -1,8 +1,11 @@
+import { armAbort } from "./abort-timer.ts";
 import { BILLING_URL, PROVIDER_ID } from "./constants.ts";
 import { assertBuildBaseUrl, assertOAuthAccessToken } from "./auth-guard.ts";
+import { debugLog } from "./debug.ts";
 import { buildStaticHeaders, type HeaderBuildContext } from "./headers.ts";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const BILLING_TIMEOUT_MS = 12_000;
 
 export interface UsageLimit {
 	id: string;
@@ -147,25 +150,35 @@ export async function fetchGrokBuildUsage(input: {
 	const access = assertOAuthAccessToken(input.accessToken);
 	assertBuildBaseUrl(BILLING_URL);
 	const fetchImpl = input.fetchImpl ?? fetch;
-	const response = await fetchImpl(BILLING_URL, {
-		method: "GET",
-		headers: {
-			...buildStaticHeaders(input.headerCtx),
-			Authorization: `Bearer ${access}`,
-			Accept: "application/json",
-		},
-		signal: input.signal,
-	});
-	if (!response.ok) return null;
-	const payload: unknown = await response.json();
-	const billing = parseBillingPayload(payload);
-	if (!billing) return null;
-	return billingToUsageReport({
-		billing,
-		accountId: input.accountId,
-		email: input.email,
-		raw: payload,
-	});
+	const armed = armAbort(
+		BILLING_TIMEOUT_MS,
+		input.signal,
+		new Error("grok-build billing request to cli-chat-proxy.grok.com timed out after 12s"),
+	);
+	try {
+		const response = await fetchImpl(BILLING_URL, {
+			method: "GET",
+			headers: {
+				...buildStaticHeaders(input.headerCtx),
+				Authorization: `Bearer ${access}`,
+				Accept: "application/json",
+			},
+			signal: armed.signal,
+		});
+		if (!response.ok) return null;
+		const payload: unknown = await response.json();
+		debugLog("GET /v1/billing response", payload);
+		const billing = parseBillingPayload(payload);
+		if (!billing) return null;
+		return billingToUsageReport({
+			billing,
+			accountId: input.accountId,
+			email: input.email,
+			raw: payload,
+		});
+	} finally {
+		armed.cancel();
+	}
 }
 
 export interface UsageFetchParams {
@@ -186,7 +199,7 @@ export interface UsageFetchContext {
 
 export const grokBuildUsageProvider = {
 	id: PROVIDER_ID,
-	cacheVersion: "grok-build-cli-1",
+	cacheVersion: 2,
 	validatesCredentials: true,
 	supports(params: UsageFetchParams): boolean {
 		return params.credential.type === "oauth" && Boolean(params.credential.accessToken?.trim());

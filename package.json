@@ -1,6 +1,6 @@
 {
   "name": "omp-grok-build",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Oh My Pi provider for Grok Build. OAuth against auth.x.ai, chat on cli-chat-proxy.grok.com, no API-key fallback.",
   "license": "MIT",
   "author": "Monsieur Barti",
@@ -42,7 +42,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts && bun test/transport.bun.ts",
     "diff-trace": "node --experimental-strip-types capture/diff-trace.ts"
   },
   "peerDependencies": {
