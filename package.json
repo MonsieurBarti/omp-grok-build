@@ -3,8 +3,17 @@
   "version": "0.1.0",
   "description": "Oh My Pi provider for Grok Build. OAuth against auth.x.ai, chat on cli-chat-proxy.grok.com, no API-key fallback.",
   "license": "MIT",
+  "author": "Monsieur Barti",
   "type": "module",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MonsieurBarti/omp-grok-build.git"
+  },
+  "homepage": "https://github.com/MonsieurBarti/omp-grok-build#readme",
+  "bugs": {
+    "url": "https://github.com/MonsieurBarti/omp-grok-build/issues"
+  },
   "keywords": [
     "oh-my-pi",
     "omp",

@@ -15,7 +15,7 @@ Stock `xai` / `xai-oauth` stay on the API path. This provider is the Build path 
 ## Install
 
 ```bash
-omp plugin install github:<owner>/<repo>
+omp plugin install github:MonsieurBarti/omp-grok-build
 ```
 
 Local checkout:
