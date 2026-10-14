@@ -1,0 +1,9 @@
+node_modules/
+agent-tools/
+dist/
+*.log
+coverage/
+capture/*.har
+capture/*.flow
+capture/local-*.json
+.DS_Store
