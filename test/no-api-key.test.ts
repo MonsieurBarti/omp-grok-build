@@ -44,6 +44,8 @@ describe("no API-key fallback", () => {
 			assert.equal("contextWindow" in model, false, model.id);
 			assert.equal("thinking" in model, false, model.id);
 		}
+		assert.equal(config.models.find(model => model.id === "grok-4.7")?.maxContextWindow, 500_000);
+		assert.equal(config.models.find(model => model.id === "grok-4.3")?.maxContextWindow, undefined);
 		assert.equal(typeof config.fetchDynamicModels, "function");
 		assert.equal("apiKey" in config, false);
 		assert.equal(config.baseUrl, GROK_BUILD_BASE_URL);

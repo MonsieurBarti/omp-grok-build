@@ -10,11 +10,12 @@ import { join } from "node:path";
  *   2. `~/.grok/version.json` (`version`, else `stable_version`)
  *   3. `PINNED_CLI_VERSION` below
  *
- * `PINNED_CLI_VERSION` is a fallback, not a live probe. Public reports in
- * 2026-09 said the proxy rejects clients below 1.0.13 and that a local CLI
- * reported 1.0.46. Replace the pin when a capture says otherwise.
+ * `PINNED_CLI_VERSION` is a fallback, not a live probe. A logged-in grok CLI
+ * 1.0.52 session (2026-10-14) sent `x-grok-client-version: 1.0.52` and
+ * `user-agent: grok-shell/1.0.52 (macos; aarch64)`. Replace the pin when a
+ * newer capture says otherwise.
  */
-export const PINNED_CLI_VERSION = "1.0.46";
+export const PINNED_CLI_VERSION = "1.0.52";
 
 export const CLI_FINGERPRINT = {
 	/** Product id. Official sampler default: grok-shell. */
@@ -37,6 +38,16 @@ export const CLI_FINGERPRINT = {
 	/** Official sampler also sends x-grok-agent-id. Turn off if a capture lacks it. */
 	sendAgentId: true,
 	sendClientMode: true,
+	/**
+	 * Same value on the warmup POST and the sampling POST in a 1.0.52 headless
+	 * session. Process-stable, generated here, never a captured uuid.
+	 */
+	sendConvGroupId: true,
+	/** W3C traceparent on the sampling request. A fresh id per HTTP call. */
+	sendTraceparent: true,
+	/** Sampling request loop guards. The empty warmup POST did not send these. */
+	doomLoopCheck: "1024",
+	exactRepetitionCheck: "64",
 } as const;
 
 const SEMVER = /^\d+\.\d+\.\d+$/;

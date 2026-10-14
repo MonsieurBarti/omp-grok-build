@@ -5,6 +5,7 @@ import {
 	buildStaticHeaders,
 	lowerHeaders,
 	optionalDynamicHeaders,
+	RECOGNIZED_OPTIONAL_CHAT_HEADERS,
 	REQUIRED_DYNAMIC_HEADERS,
 	type HeaderBuildContext,
 } from "./headers.ts";
@@ -84,10 +85,12 @@ export function diffCapturedRequest(
 	}
 
 	if (kind === "chat") {
-		for (const name of [...REQUIRED_DYNAMIC_HEADERS, ...optionalDynamicHeaders()]) {
+		const required = new Set<string>([...REQUIRED_DYNAMIC_HEADERS, ...optionalDynamicHeaders()]);
+		const recognized = [...required, ...RECOGNIZED_OPTIONAL_CHAT_HEADERS];
+		for (const name of recognized) {
 			const actual = captured[name];
 			if (!actual) {
-				missing.push(name);
+				if (required.has(name)) missing.push(name);
 				continue;
 			}
 			if (!dynamicValueOk(name, actual)) {
@@ -113,6 +116,7 @@ export function diffCapturedRequest(
 		...Object.keys(plugin),
 		...REQUIRED_DYNAMIC_HEADERS,
 		...optionalDynamicHeaders(),
+		...RECOGNIZED_OPTIONAL_CHAT_HEADERS,
 		"authorization",
 		...IGNORED,
 	]);
@@ -127,6 +131,9 @@ export function diffHasFailures(diff: HeaderDiff): boolean {
 function dynamicValueOk(name: string, value: string): boolean {
 	if (name === "x-grok-turn-idx") return /^[1-9]\d*$/.test(value);
 	if (name === "x-grok-model-override") return value.trim().length > 0;
+	if (name === "traceparent") return /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/.test(value);
+	if (name === "x-grok-doom-loop-check") return value === CLI_FINGERPRINT.doomLoopCheck;
+	if (name === "x-grok-exact-repetition-check") return value === CLI_FINGERPRINT.exactRepetitionCheck;
 	if (name.endsWith("-id")) return UUID.test(value) || value.trim().length > 0;
 	return value.trim().length > 0;
 }
@@ -134,6 +141,9 @@ function dynamicValueOk(name: string, value: string): boolean {
 function expectedShape(name: string): string {
 	if (name === "x-grok-turn-idx") return "<positive integer>";
 	if (name === "x-grok-model-override") return "<model id>";
+	if (name === "traceparent") return "00-<32 hex>-<16 hex>-01";
+	if (name === "x-grok-doom-loop-check") return CLI_FINGERPRINT.doomLoopCheck;
+	if (name === "x-grok-exact-repetition-check") return CLI_FINGERPRINT.exactRepetitionCheck;
 	return "<non-empty id>";
 }
 

@@ -18,8 +18,11 @@ export interface GrokBuildProviderConfig {
 	api: string;
 	authHeader: true;
 	headers: Record<string, string>;
-	/** Curated ids, present before live discovery. Metadata lives on the dynamic catalog. */
-	models: { id: string }[];
+	/**
+	 * Curated ids, present before live discovery. `maxContextWindow` is the
+	 * larger CLI option. Context, thinking, and price live on the dynamic catalog.
+	 */
+	models: { id: string; maxContextWindow?: number }[];
 	fetchDynamicModels: (apiKey: string | undefined) => Promise<unknown[]>;
 	streamSimple: (model: StreamModel, context: { messages?: unknown[] }, options?: StreamOptions) => unknown;
 	oauth: {

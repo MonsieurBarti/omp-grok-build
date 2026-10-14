@@ -4,12 +4,14 @@ const turns = new Map<string, number>();
 const agents = new Map<string, string>();
 const conversations = new Map<string, string>();
 let fallbackSessionId: string | undefined;
+let convGroupId: string | undefined;
 
 export function resetGrokSessionState(): void {
 	turns.clear();
 	agents.clear();
 	conversations.clear();
 	fallbackSessionId = undefined;
+	convGroupId = undefined;
 }
 
 /** Stable for the process when omp did not pass a session id. */
@@ -26,6 +28,15 @@ export function agentIdFor(sessionId: string, uuid: () => string = randomUUID): 
 	const created = uuid();
 	agents.set(sessionId, created);
 	return created;
+}
+
+/**
+ * Process-stable conversation group. The CLI sends the same
+ * `x-grok-conv-group-id` on every responses call in a process.
+ */
+export function conversationGroupId(uuid: () => string = randomUUID): string {
+	if (!convGroupId) convGroupId = uuid();
+	return convGroupId;
 }
 
 /** Stable conversation id when the fingerprint does not reuse the session id. */

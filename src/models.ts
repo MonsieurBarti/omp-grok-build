@@ -35,6 +35,14 @@ export interface ServerModel {
 	wire?: unknown;
 	api?: unknown;
 	endpoints?: unknown;
+	context_windows?: unknown;
+	extra_headers?: unknown;
+	hidden?: unknown;
+	supported_in_api?: unknown;
+	auto_compact_threshold_percent?: unknown;
+	compactions_remaining?: unknown;
+	info?: unknown;
+	model?: unknown;
 	[key: string]: unknown;
 }
 
@@ -47,7 +55,9 @@ export interface ProviderModel {
 	input: ("text" | "image")[];
 	cost: ModelMetadata["cost"];
 	contextWindow: number;
+	maxContextWindow?: number;
 	maxTokens: number;
+	omitMaxOutputTokens?: boolean;
 	headers: Record<string, string>;
 	compat: ResponsesCompat;
 }
@@ -57,10 +67,30 @@ const wireById = new Map<string, WireApi>();
 const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * Windows the CLI proxy stamps on every row when it has no per-model limit.
- * 256000 is the grok-4 / grok-build-0.1 generic window, not grok-4.7's 500k.
+ * Windows an OpenAI-style list stamps on every row when it has no per-model
+ * limit. A CLI cache row that also sends `context_windows` is not this case:
+ * `context_window` 256000 is the active window, and 500000 is the larger option.
  */
 const GENERIC_CONTEXT_WINDOWS = new Set([128_000, 131_072, 256_000, 262_144]);
+
+const PROTECTED_EXTRA = new Set([
+	"authorization",
+	"user-agent",
+	"x-xai-token-auth",
+	"x-grok-client-identifier",
+	"x-grok-client-version",
+	"x-grok-client-mode",
+	"x-authenticateresponse",
+	"x-grok-session-id",
+	"x-grok-conv-id",
+	"x-grok-req-id",
+	"x-grok-agent-id",
+	"x-grok-turn-idx",
+	"x-grok-model-override",
+	"x-grok-conv-group-id",
+	"x-grok-user-id",
+	"traceparent",
+]);
 
 /** Explicit per-model context. `context_length` / `max_model_len` are generic server fields. */
 const CONTEXT_KEYS = ["context_window", "contextWindow"] as const;
@@ -94,6 +124,7 @@ function cloneMeta(meta: ModelMetadata, id: string, name?: string): ModelMetadat
 		cost: { ...meta.cost },
 		thinking: cloneThinking(meta.thinking),
 		reasoningEffortMap: meta.reasoningEffortMap ? { ...meta.reasoningEffortMap } : undefined,
+		extraHeaders: meta.extraHeaders ? { ...meta.extraHeaders } : undefined,
 	};
 }
 
@@ -171,16 +202,67 @@ function readImages(row: ServerModel): boolean | undefined {
 	return modalities.some(item => /image|vision/.test(item));
 }
 
+function effortToken(item: unknown): string | undefined {
+	if (typeof item === "string") {
+		const token = item.trim().toLowerCase();
+		return token || undefined;
+	}
+	if (!isRecord(item)) return undefined;
+	const raw = item.value ?? item.id;
+	if (typeof raw !== "string") return undefined;
+	const token = raw.trim().toLowerCase();
+	return token || undefined;
+}
+
 /**
  * A real ladder is `reasoning_efforts` with two or more levels.
- * A singular `reasoning_effort: "high"` is the default level, not the ladder.
+ * Strings and `{value|id, default}` objects both count. A singular
+ * `reasoning_effort` or a one-element `["high"]` is the default level, not the ladder.
  */
-function readEfforts(row: ServerModel): string[] | undefined {
+function readEfforts(row: ServerModel): { efforts: string[]; defaultLevel: string } | undefined {
 	if (!Array.isArray(row.reasoning_efforts) || row.reasoning_efforts.length < 2) return undefined;
-	const listed = stringList(row.reasoning_efforts);
-	if (!listed || listed.length < 2) return undefined;
-	const picked = EFFORT_ORDER.filter(effort => listed.includes(effort));
-	return picked.length >= 2 ? [...picked] : undefined;
+	const listed: string[] = [];
+	let flagged: string | undefined;
+	for (const item of row.reasoning_efforts) {
+		const token = effortToken(item);
+		if (!token || !EFFORT_ORDER.includes(token as (typeof EFFORT_ORDER)[number])) continue;
+		if (!listed.includes(token)) listed.push(token);
+		if (isRecord(item) && item.default === true) flagged = token;
+	}
+	if (listed.length < 2) return undefined;
+	const efforts = EFFORT_ORDER.filter(effort => listed.includes(effort));
+	if (efforts.length < 2) return undefined;
+	const singular = typeof row.reasoning_effort === "string" ? row.reasoning_effort.trim().toLowerCase() : "";
+	const defaultLevel =
+		(flagged && efforts.includes(flagged as (typeof EFFORT_ORDER)[number]) ? flagged : undefined) ??
+		(singular && efforts.includes(singular as (typeof EFFORT_ORDER)[number]) ? singular : undefined) ??
+		(efforts.includes("high") ? "high" : efforts[efforts.length - 1]!);
+	return { efforts: [...efforts], defaultLevel };
+}
+
+function readContextWindows(row: ServerModel): number[] | undefined {
+	if (!Array.isArray(row.context_windows)) return undefined;
+	const values: number[] = [];
+	for (const item of row.context_windows) {
+		const parsed = positiveInt(item);
+		if (parsed !== undefined && !values.includes(parsed)) values.push(parsed);
+	}
+	return values.length > 0 ? values : undefined;
+}
+
+function readExtraHeaders(row: ServerModel): Record<string, string> | undefined {
+	if (!isRecord(row.extra_headers)) return undefined;
+	const headers: Record<string, string> = {};
+	for (const [name, value] of Object.entries(row.extra_headers)) {
+		if (typeof value !== "string" || !value.trim()) continue;
+		if (PROTECTED_EXTRA.has(name.toLowerCase())) continue;
+		headers[name] = value;
+	}
+	return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function outputFieldPresent(row: ServerModel): boolean {
+	return OUTPUT_KEYS.some(key => key in row);
 }
 
 function isCuratedId(id: string): boolean {
@@ -219,21 +301,56 @@ function readWire(row: ServerModel): WireApi | undefined {
 	return undefined;
 }
 
+function applyContext(
+	base: ModelMetadata,
+	row: ServerModel,
+	uniformContext: number | undefined,
+): void {
+	const windows = readContextWindows(row);
+	const stated = firstPositive(row, CONTEXT_KEYS);
+	if (windows) {
+		const active = stated ?? Math.min(...windows);
+		const max = Math.max(active, ...windows);
+		base.contextWindow = active;
+		base.maxContextWindow = max > active ? max : undefined;
+		return;
+	}
+	if (stated === undefined || ignoreServerContext(base, stated, uniformContext)) return;
+	base.contextWindow = stated;
+	if (base.maxContextWindow !== undefined && base.maxContextWindow <= stated) {
+		base.maxContextWindow = undefined;
+	}
+}
+
 function applyServer(
 	base: ModelMetadata,
 	row: ServerModel | undefined,
 	options?: { uniformContext?: number },
 ): ModelMetadata {
 	if (!row) return base;
-	const context = firstPositive(row, CONTEXT_KEYS);
+	applyContext(base, row, options?.uniformContext);
 	const explicitOutput = firstPositive(row, OUTPUT_KEYS);
-	if (context !== undefined && !ignoreServerContext(base, context, options?.uniformContext)) {
-		base.contextWindow = context;
-	}
 	if (explicitOutput !== undefined) {
 		base.maxTokens = explicitOutput;
+		base.omitMaxOutputTokens = false;
+	} else if (outputFieldPresent(row)) {
+		base.omitMaxOutputTokens = true;
 	} else if (base.maxTokens >= base.contextWindow) {
 		base.maxTokens = Math.max(1, Math.min(16_384, Math.floor(base.contextWindow / 2)));
+	}
+
+	const extra = readExtraHeaders(row);
+	if (extra) base.extraHeaders = extra;
+	else if (isRecord(row.extra_headers)) base.extraHeaders = undefined;
+
+	const compactPercent = positiveInt(row.auto_compact_threshold_percent);
+	if (compactPercent !== undefined && compactPercent <= 100) {
+		base.autoCompactThresholdPercent = compactPercent;
+	}
+	if (typeof row.compactions_remaining === "number" && Number.isInteger(row.compactions_remaining)) {
+		if (row.compactions_remaining >= 0 && row.compactions_remaining <= 100) {
+			base.compactionsRemaining = row.compactions_remaining;
+		}
 	}
 
 	const images = readImages(row);
@@ -241,17 +358,17 @@ function applyServer(
 
 	const efforts = readEfforts(row);
 	if (efforts !== undefined) {
-		if (efforts.length === 0) {
-			base.supportsReasoningEffort = false;
-			base.thinking = undefined;
-		} else {
-			base.reasoning = true;
-			base.supportsReasoningEffort = true;
-			base.thinking = {
-				mode: "effort",
-				efforts: [...efforts],
-				defaultLevel: efforts.includes("high") ? "high" : efforts[efforts.length - 1]!,
-			};
+		base.reasoning = true;
+		base.supportsReasoningEffort = true;
+		base.thinking = {
+			mode: "effort",
+			efforts: efforts.efforts,
+			defaultLevel: efforts.defaultLevel,
+		};
+		if (base.reasoningEffortMap) {
+			const next = { ...base.reasoningEffortMap };
+			for (const level of efforts.efforts) delete next[level];
+			base.reasoningEffortMap = Object.keys(next).length > 0 ? next : undefined;
 		}
 	} else if (typeof row.supports_reasoning === "boolean") {
 		base.reasoning = row.supports_reasoning;
@@ -304,9 +421,29 @@ function sharedContext(rows: readonly ServerModel[]): number | undefined {
 	return values.every(value => value === values[0]) ? values[0] : undefined;
 }
 
+function compactionAtTokens(meta: ModelMetadata): number | undefined {
+	const percent = meta.autoCompactThresholdPercent;
+	if (percent === undefined || percent <= 0 || percent > 100) return undefined;
+	const at = Math.floor((meta.contextWindow * percent) / 100);
+	return at > 0 ? at : undefined;
+}
+
 export function toProviderModel(meta: ModelMetadata): ProviderModel {
 	const thinking =
 		meta.reasoning && meta.supportsReasoningEffort ? cloneThinking(meta.thinking) : undefined;
+	const headers: Record<string, string> = {
+		...(meta.extraHeaders ?? {}),
+		"x-grok-model-override": meta.id,
+	};
+	if (meta.compactionsRemaining !== undefined) {
+		headers["x-compactions-remaining"] = String(meta.compactionsRemaining);
+	}
+	const compactionAt = compactionAtTokens(meta);
+	if (compactionAt !== undefined) headers["x-compaction-at"] = String(compactionAt);
+	const maxContext =
+		meta.maxContextWindow !== undefined && meta.maxContextWindow > meta.contextWindow
+			? meta.maxContextWindow
+			: undefined;
 	return {
 		id: meta.id,
 		name: meta.name,
@@ -316,8 +453,10 @@ export function toProviderModel(meta: ModelMetadata): ProviderModel {
 		input: [...meta.input],
 		cost: { ...meta.cost },
 		contextWindow: meta.contextWindow,
+		...(maxContext !== undefined ? { maxContextWindow: maxContext } : {}),
 		maxTokens: meta.maxTokens,
-		headers: { "x-grok-model-override": meta.id },
+		...(meta.omitMaxOutputTokens ? { omitMaxOutputTokens: true } : {}),
+		headers,
 		compat: responsesCompatFor(meta.id, {
 			supportsReasoningEffort: meta.supportsReasoningEffort,
 			...(meta.reasoningEffortMap ? { reasoningEffortMap: { ...meta.reasoningEffortMap } } : {}),
@@ -335,17 +474,23 @@ export function seedModels(): ProviderModel[] {
  * Ids registered synchronously with the provider. Config validation
  * (`retry.fallbackChains`) runs before `fetchDynamicModels`, so a selector
  * such as `grok-build/grok-4.7:high` is unknown unless the id already exists.
- * These rows carry only the id. Limits, thinking, and price stay on the
- * dynamic catalog, which omp merges on top without letting an empty field
- * overwrite a discovered one.
+ * These rows carry the id, plus `maxContextWindow` when the CLI lists a larger
+ * option. Limits, thinking, and price stay on the dynamic catalog. omp's
+ * overlay merge leaves a discovered `contextWindow` alone when the stub omits
+ * it, and uses `maxContextWindow` as the extended-context tier.
  */
-export function startupCatalogModels(): { id: string }[] {
-	return MODEL_METADATA.map(model => ({ id: model.id }));
+export function startupCatalogModels(): { id: string; maxContextWindow?: number }[] {
+	return MODEL_METADATA.map(model =>
+		model.maxContextWindow !== undefined && model.maxContextWindow > model.contextWindow
+			? { id: model.id, maxContextWindow: model.maxContextWindow }
+			: { id: model.id },
+	);
 }
 
 export function isExcludedServerModel(row: ServerModel): boolean {
 	const id = typeof row.id === "string" ? bareModelId(row.id) : "";
 	if (!id || !isChatModelId(id)) return true;
+	if (row.hidden === true || row.supported_in_api === false) return true;
 	const object = typeof row.object === "string" ? row.object.toLowerCase() : "";
 	if (object && object !== "model") return true;
 	const outputs = stringList(row.output_modalities) ?? [];
@@ -357,8 +502,9 @@ export function isExcludedServerModel(row: ServerModel): boolean {
 
 /**
  * Curated rows stay in the picker. Live ids update a matching row and append
- * ids the table does not know. A proxy that returns four generic 256k rows
- * does not drop grok-4.3 or replace grok-4.7's 500k window.
+ * ids the table does not know. A CLI cache row's `context_window` is the
+ * active window and `context_windows` is the option list. A bare generic
+ * window with no `context_windows` does not replace the table.
  */
 export function mergeServerModels(rows: readonly ServerModel[]): ProviderModel[] {
 	const chat = rows.filter(row => !isExcludedServerModel(row));
@@ -381,12 +527,33 @@ export function mergeServerModels(rows: readonly ServerModel[]): ProviderModel[]
 	return merged.map(toProviderModel);
 }
 
+function unwrapModelRow(row: ServerModel, fallbackId?: string): ServerModel {
+	const info = isRecord(row.info) ? row.info : undefined;
+	const source = info ?? row;
+	const id =
+		(typeof source.id === "string" && source.id.trim()) ||
+		(typeof source.model === "string" && source.model.trim()) ||
+		(typeof row.id === "string" && row.id.trim()) ||
+		fallbackId;
+	return id ? { ...source, id } : source;
+}
+
+/**
+ * Accepts an OpenAI `{data:[]}` list and the grok CLI cache:
+ * `{ models: { "<id>": { info: { ... } } } }`.
+ */
 export function parseModelListPayload(payload: unknown): ServerModel[] {
-	if (Array.isArray(payload)) return payload.filter(isRecord);
+	if (Array.isArray(payload)) return payload.filter(isRecord).map(row => unwrapModelRow(row));
 	if (!isRecord(payload)) return [];
-	if (Array.isArray(payload.data)) return payload.data.filter(isRecord);
-	if (Array.isArray(payload.models)) return payload.models.filter(isRecord);
-	return [];
+	if (Array.isArray(payload.data)) return payload.data.filter(isRecord).map(row => unwrapModelRow(row));
+	if (Array.isArray(payload.models)) return payload.models.filter(isRecord).map(row => unwrapModelRow(row));
+	if (!isRecord(payload.models)) return [];
+	const rows: ServerModel[] = [];
+	for (const [key, value] of Object.entries(payload.models)) {
+		if (!isRecord(value)) continue;
+		rows.push(unwrapModelRow(value, key));
+	}
+	return rows;
 }
 
 function isRecord(value: unknown): value is ServerModel {

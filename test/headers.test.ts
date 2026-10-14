@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
 
-import { canonicalCliVersion, readCliVersionFile, resolveCliVersion } from "../src/fingerprint.ts";
+import { canonicalCliVersion, PINNED_CLI_VERSION, readCliVersionFile, resolveCliVersion } from "../src/fingerprint.ts";
 import { buildChatHeaders, buildStaticHeaders, lowerHeaders } from "../src/headers.ts";
 import { resetGrokSessionState } from "../src/session.ts";
 import { prepareGrokBuildCall } from "../src/stream.ts";
-import { mergeServerModels } from "../src/models.ts";
+import { mergeServerModels, toProviderModel, mergeModel } from "../src/models.ts";
+import { jwt } from "./helpers.ts";
 
 const ctx = { version: "1.2.3", platform: "darwin", arch: "arm64", mode: "interactive" };
 
@@ -44,6 +45,11 @@ describe("headers", () => {
 		assert.equal(headers["x-grok-turn-idx"], "1");
 		assert.equal(headers["x-grok-model-override"], "grok-4.7");
 		assert.equal(headers.authorization, "Bearer oauth-access-token");
+		assert.equal(headers["x-grok-conv-group-id"], "00000000-0000-4000-8000-000000000003");
+		assert.equal(headers["x-grok-doom-loop-check"], "1024");
+		assert.equal(headers["x-grok-exact-repetition-check"], "64");
+		assert.match(headers.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+		assert.equal(headers["x-grok-user-id"], undefined);
 
 		const second = prepareGrokBuildCall(
 			{ id: "grok-4.7" },
@@ -56,6 +62,30 @@ describe("headers", () => {
 		assert.equal(again["x-grok-agent-id"], headers["x-grok-agent-id"]);
 		assert.equal(again["x-grok-session-id"], "session-1");
 		assert.equal(again["x-grok-turn-idx"], "2");
+		assert.equal(again["x-grok-conv-group-id"], headers["x-grok-conv-group-id"]);
+		assert.notEqual(again.traceparent, headers.traceparent);
+	});
+
+	it("sends the account id as x-grok-user-id and the model's compaction headers", () => {
+		const catalog = toProviderModel(mergeModel("grok-4.7"));
+		const prepared = prepareGrokBuildCall(
+			catalog,
+			{ messages: [{ role: "user", content: "hi" }] },
+			{ apiKey: jwt({ principal_id: "acct-from-token", sub: "sub-a" }), sessionId: "s" },
+			ctx,
+		);
+		const headers = lowerHeaders(prepared.headers);
+		assert.equal(headers["x-grok-user-id"], "acct-from-token");
+		assert.equal(headers["x-compactions-remaining"], "1");
+		assert.equal(headers["x-compaction-at"], "204800");
+
+		const emailLike = prepareGrokBuildCall(
+			{ id: "grok-4.7" },
+			{ messages: [{ role: "user", content: "hi" }] },
+			{ apiKey: jwt({ principal_id: "person@example.com" }), sessionId: "s2" },
+			ctx,
+		);
+		assert.equal(lowerHeaders(emailLike.headers)["x-grok-user-id"], undefined);
 	});
 
 	it("uses chat completions only when that model's wire says so", () => {
@@ -86,6 +116,11 @@ describe("headers", () => {
 		assert.equal(
 			resolveCliVersion({ env: {}, versionFile: join(dir, "missing.json"), pinned: "1.0.46" }),
 			"1.0.46",
+		);
+		assert.equal(PINNED_CLI_VERSION, "1.0.52");
+		assert.equal(
+			resolveCliVersion({ env: {}, versionFile: join(dir, "missing.json") }),
+			"1.0.52",
 		);
 	});
 

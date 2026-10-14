@@ -1,6 +1,6 @@
 {
   "name": "omp-grok-build",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Oh My Pi provider for Grok Build. OAuth against auth.x.ai, chat on cli-chat-proxy.grok.com, no API-key fallback.",
   "license": "MIT",
   "author": "Monsieur Barti",

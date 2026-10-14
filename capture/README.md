@@ -100,8 +100,8 @@ Exit code 1 prints lines like:
 
 ```text
 value     x-grok-client-version
-  plugin  1.0.46
-  capture 1.0.52
+  plugin  1.0.52
+  capture 1.0.53
 extra     x-grok-deployment-id  (capture has this, plugin does not send it)
 ```
 

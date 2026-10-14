@@ -1,4 +1,7 @@
+import { randomBytes } from "node:crypto";
+
 import { CLI_FINGERPRINT, resolveCliVersion, resolveClientMode } from "./fingerprint.ts";
+import { conversationGroupId } from "./session.ts";
 
 export interface HeaderBuildContext {
 	version?: string;
@@ -61,10 +64,27 @@ export const REQUIRED_DYNAMIC_HEADERS = [
 	"x-grok-req-id",
 	"x-grok-turn-idx",
 	"x-grok-model-override",
+	"x-grok-conv-group-id",
+	"traceparent",
+	"x-grok-doom-loop-check",
+	"x-grok-exact-repetition-check",
 ] as const;
 
 export function optionalDynamicHeaders(): string[] {
 	return CLI_FINGERPRINT.sendAgentId ? ["x-grok-agent-id"] : [];
+}
+
+/** Present on a sampling request when the model or the token supplies them. */
+export const RECOGNIZED_OPTIONAL_CHAT_HEADERS = [
+	"x-grok-user-id",
+	"x-compactions-remaining",
+	"x-compaction-at",
+] as const;
+
+/** `00-{trace-id}-{span-id}-01`, matching the CLI's sampling request. */
+export function newTraceparent(bytes: (size: number) => Buffer = randomBytes): string {
+	const buf = bytes(24);
+	return `00-${buf.subarray(0, 16).toString("hex")}-${buf.subarray(16, 24).toString("hex")}-01`;
 }
 
 /** Headers whose values the plugin owns. Caller headers cannot replace them. */
@@ -82,6 +102,11 @@ export const PROTECTED_HEADER_NAMES = [
 	"x-grok-agent-id",
 	"x-grok-turn-idx",
 	"x-grok-model-override",
+	"x-grok-conv-group-id",
+	"x-grok-user-id",
+	"traceparent",
+	"x-grok-doom-loop-check",
+	"x-grok-exact-repetition-check",
 ] as const;
 
 export interface ChatHeaderInput extends HeaderBuildContext {
@@ -92,6 +117,9 @@ export interface ChatHeaderInput extends HeaderBuildContext {
 	agentId?: string;
 	turnIndex: number;
 	modelId: string;
+	convGroupId?: string;
+	userId?: string;
+	traceparent?: string;
 	extra?: Record<string, string | undefined>;
 }
 
@@ -111,6 +139,17 @@ export function buildChatHeaders(input: ChatHeaderInput): Record<string, string>
 	if (CLI_FINGERPRINT.sendAgentId && input.agentId) {
 		owned["x-grok-agent-id"] = input.agentId;
 	}
+	if (CLI_FINGERPRINT.sendConvGroupId) {
+		owned["x-grok-conv-group-id"] = input.convGroupId ?? conversationGroupId();
+	}
+	if (CLI_FINGERPRINT.sendTraceparent) {
+		owned.traceparent = input.traceparent ?? newTraceparent();
+	}
+	if (input.userId && !input.userId.includes("@")) {
+		owned["x-grok-user-id"] = input.userId;
+	}
+	owned["x-grok-doom-loop-check"] = CLI_FINGERPRINT.doomLoopCheck;
+	owned["x-grok-exact-repetition-check"] = CLI_FINGERPRINT.exactRepetitionCheck;
 
 	const merged: Record<string, string> = {};
 	for (const [name, value] of Object.entries(input.extra ?? {})) {

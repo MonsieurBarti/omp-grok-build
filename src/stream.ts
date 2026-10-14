@@ -4,10 +4,18 @@ import { armAbort } from "./abort-timer.ts";
 import { assertBuildBaseUrl, assertOAuthAccessToken } from "./auth-guard.ts";
 import { GROK_BUILD_API, GROK_BUILD_BASE_URL, PROVIDER_ID } from "./constants.ts";
 import { debugLog, redactHeaders } from "./debug.ts";
-import { buildChatHeaders, type HeaderBuildContext } from "./headers.ts";
+import { buildChatHeaders, newTraceparent, type HeaderBuildContext } from "./headers.ts";
 import { wireFor, bareModelId } from "./models.ts";
 import { CLI_FINGERPRINT } from "./fingerprint.ts";
-import { agentIdFor, conversationIdFor, countUserTurns, nextTurnIndex, resolveSessionId } from "./session.ts";
+import { accountIdFromAccessToken } from "./oauth.ts";
+import {
+	agentIdFor,
+	conversationGroupId,
+	conversationIdFor,
+	countUserTurns,
+	nextTurnIndex,
+	resolveSessionId,
+} from "./session.ts";
 import type { WireApi } from "./model-metadata.ts";
 import {
 	REQUEST_TIMEOUT_MS,
@@ -63,6 +71,7 @@ export function prepareGrokBuildCall(
 	const turnIndex = nextTurnIndex(sessionId, countUserTurns(context?.messages));
 	const modelId = bareModelId(model.id);
 	const wire = wireFor(modelId);
+	const userId = accountIdFromAccessToken(token);
 	const headers = buildChatHeaders({
 		...deps,
 		accessToken: token,
@@ -72,6 +81,9 @@ export function prepareGrokBuildCall(
 		agentId,
 		turnIndex,
 		modelId,
+		convGroupId: conversationGroupId(uuid),
+		...(userId ? { userId } : {}),
+		traceparent: newTraceparent(),
 		extra: {
 			...(model.headers ?? {}),
 			...(options?.headers ?? {}),

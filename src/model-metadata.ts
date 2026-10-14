@@ -1,23 +1,27 @@
 /**
  * Maintained Grok Build model metadata.
  *
- * Live `/v1/models` updates a row only when the field is a real per-model
- * value (see src/models.ts). A generic 256k window or `reasoning_effort: "high"`
- * does not replace this table. Edit the table when a capture or the docs change.
+ * A logged-in Grok CLI 1.0.52 cache of `GET /v1/models` (2026-10-14) is the
+ * source for the four models that payload lists. `context_window` is the
+ * active window (256k). `context_windows` also offers 500k. `reasoning_efforts`
+ * is the ladder, and the entry with `default: true` is the default level.
+ * `max_completion_tokens: null` means the CLI sends no output cap.
+ * `maxTokens` below is omp's local budget, because the host requires a number.
+ * Requests set `omitMaxOutputTokens` so that budget is not sent.
  *
- * Prices are the public list rates (docs.x.ai / the CLI catalog). Prompts at
- * or above 200k input tokens are billed at 2x on the API. `grok-build` is the
- * included SKU and stays at 0. The picker shows the base rate.
+ * Live `/v1/models` replaces those fields when the server sends them (see
+ * src/models.ts). A bare generic window or a singular `reasoning_effort` does
+ * not. Models the proxy omitted stay on this table.
+ *
+ * Prices are the public list rates (docs.x.ai). Prompts at or above 200k
+ * input tokens are billed at 2x on the API. `grok-build` is the included SKU
+ * and stays at 0. The picker shows the base rate. The cache describes Fast as
+ * "2x the price."
  *
  * Sources, as of 2026-10-14:
- * - grok-4.5 / 4.6 / 4.7 context, images, and reasoning efforts: docs.x.ai.
- *   Output budget is the Responses API default max_output_tokens (128_000),
- *   which is not the context window.
- * - grok-4.7 Fast price is 2x grok-4.7 below 200k tokens (docs.x.ai). It is a
- *   Build / Cursor SKU, not on the public API.
+ * - grok-4.7, grok-4.7-build-fast, grok-4.6, grok-4.5: CLI 1.0.52 models cache.
  * - grok-4.3 (1M) and grok-4.20 (2M) windows, and image input on composer /
- *   grok-build: taken from CLI catalog notes (pi-grok-cli, models observed on
- *   the CLI proxy). Not re-fetched from a live account in this repo.
+ *   grok-build: CLI catalog notes. The 1.0.52 cache did not list them.
  * - grok-build and grok-4.20 reasoning SKUs think, but omp's own catalog treats
  *   them as having no reasoning.effort control. thinking is omitted on purpose.
  */
@@ -47,8 +51,16 @@ export interface ModelMetadata {
 	/** xhigh on a model that only has high is sent as high. */
 	reasoningEffortMap?: Record<string, string>;
 	input: ("text" | "image")[];
+	/** Active window. The CLI's `context_window` (session totalContextTokens). */
 	contextWindow: number;
+	/** Larger option from `context_windows`, when the server lists one. */
+	maxContextWindow?: number;
+	/** Local omp budget. Not sent when `omitMaxOutputTokens` is set. */
 	maxTokens: number;
+	omitMaxOutputTokens?: boolean;
+	extraHeaders?: Record<string, string>;
+	compactionsRemaining?: number;
+	autoCompactThresholdPercent?: number;
 	cost: ModelCost;
 }
 
@@ -67,6 +79,19 @@ const highOnly: ThinkingMeta = {
 };
 
 const frontierCost: ModelCost = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: ZERO_WRITE };
+
+/**
+ * grok CLI 1.0.52 cache for the four listed chat models.
+ * 128k maxTokens is the local omp budget. The server field is null.
+ */
+const cliListed = {
+	contextWindow: 256_000,
+	maxContextWindow: 500_000,
+	maxTokens: 128_000,
+	omitMaxOutputTokens: true,
+	compactionsRemaining: 1,
+	autoCompactThresholdPercent: 80,
+} as const;
 const fastCost: ModelCost = { input: 4, output: 12, cacheRead: 1, cacheWrite: ZERO_WRITE };
 const legacyCost: ModelCost = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: ZERO_WRITE };
 const included: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -84,8 +109,7 @@ export const MODEL_METADATA: readonly ModelMetadata[] = [
 		supportsReasoningEffort: true,
 		thinking: xhigh,
 		input: ["text", "image"],
-		contextWindow: 500_000,
-		maxTokens: 128_000,
+		...cliListed,
 		cost: frontierCost,
 	}),
 	chat({
@@ -96,8 +120,7 @@ export const MODEL_METADATA: readonly ModelMetadata[] = [
 		supportsReasoningEffort: true,
 		thinking: xhigh,
 		input: ["text", "image"],
-		contextWindow: 500_000,
-		maxTokens: 128_000,
+		...cliListed,
 		cost: fastCost,
 	}),
 	chat({
@@ -108,8 +131,7 @@ export const MODEL_METADATA: readonly ModelMetadata[] = [
 		supportsReasoningEffort: true,
 		thinking: xhigh,
 		input: ["text", "image"],
-		contextWindow: 500_000,
-		maxTokens: 128_000,
+		...cliListed,
 		cost: frontierCost,
 	}),
 	chat({
@@ -121,8 +143,7 @@ export const MODEL_METADATA: readonly ModelMetadata[] = [
 		thinking: highOnly,
 		reasoningEffortMap: { xhigh: "high" },
 		input: ["text", "image"],
-		contextWindow: 500_000,
-		maxTokens: 128_000,
+		...cliListed,
 		cost: frontierCost,
 	}),
 	chat({

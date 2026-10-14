@@ -50,6 +50,16 @@ function rowsOf(payload: unknown): unknown[] {
 	const record = payload as Record<string, unknown>;
 	if (Array.isArray(record.data)) return record.data;
 	if (Array.isArray(record.models)) return record.models;
+	if (typeof record.models === "object" && record.models !== null) {
+		return Object.entries(record.models as Record<string, unknown>).map(([id, value]) => {
+			if (typeof value === "object" && value !== null && "info" in value) {
+				const info = (value as { info?: unknown }).info;
+				if (typeof info === "object" && info !== null) return info;
+			}
+			if (typeof value === "object" && value !== null) return { id, ...value };
+			return { id };
+		});
+	}
 	return [];
 }
 
@@ -59,7 +69,12 @@ export function rememberModelsPayload(payload: unknown): void {
 		if (typeof row !== "object" || row === null) return "- (non-object)";
 		const record = row as Record<string, unknown>;
 		const id = typeof record.id === "string" ? record.id : "?";
-		const context = record.context_window ?? record.contextWindow ?? record.context_length ?? record.max_model_len;
+		const context =
+			record.context_windows ??
+			record.context_window ??
+			record.contextWindow ??
+			record.context_length ??
+			record.max_model_len;
 		const output = record.max_output_tokens ?? record.max_completion_tokens ?? record.max_tokens;
 		const effort = record.reasoning_efforts ?? record.reasoning_effort;
 		return `- ${id} context=${fmt(context)} output=${fmt(output)} effort=${fmt(effort)}`;
