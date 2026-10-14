@@ -331,6 +331,18 @@ export function seedModels(): ProviderModel[] {
 	return metas.map(toProviderModel);
 }
 
+/**
+ * Ids registered synchronously with the provider. Config validation
+ * (`retry.fallbackChains`) runs before `fetchDynamicModels`, so a selector
+ * such as `grok-build/grok-4.7:high` is unknown unless the id already exists.
+ * These rows carry only the id. Limits, thinking, and price stay on the
+ * dynamic catalog, which omp merges on top without letting an empty field
+ * overwrite a discovered one.
+ */
+export function startupCatalogModels(): { id: string }[] {
+	return MODEL_METADATA.map(model => ({ id: model.id }));
+}
+
 export function isExcludedServerModel(row: ServerModel): boolean {
 	const id = typeof row.id === "string" ? bareModelId(row.id) : "";
 	if (!id || !isChatModelId(id)) return true;

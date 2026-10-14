@@ -1,5 +1,6 @@
 import { GROK_BUILD_API, GROK_BUILD_BASE_URL, PROVIDER_ID } from "./constants.ts";
 import { discoverModels } from "./discovery.ts";
+import { startupCatalogModels } from "./models.ts";
 import { buildStaticHeaders, type HeaderBuildContext } from "./headers.ts";
 import {
 	loginGrokBuild,
@@ -17,6 +18,8 @@ export interface GrokBuildProviderConfig {
 	api: string;
 	authHeader: true;
 	headers: Record<string, string>;
+	/** Curated ids, present before live discovery. Metadata lives on the dynamic catalog. */
+	models: { id: string }[];
 	fetchDynamicModels: (apiKey: string | undefined) => Promise<unknown[]>;
 	streamSimple: (model: StreamModel, context: { messages?: unknown[] }, options?: StreamOptions) => unknown;
 	oauth: {
@@ -46,6 +49,7 @@ export function createGrokBuildProviderConfig(deps: ProviderDeps): GrokBuildProv
 		api: GROK_BUILD_API,
 		authHeader: true,
 		headers: buildStaticHeaders(headerCtx),
+		models: startupCatalogModels(),
 		fetchDynamicModels: apiKey => discoverModels(apiKey, deps.fetchImpl, headerCtx),
 		streamSimple: (model, context, options) =>
 			streamGrokBuild(model, context ?? {}, options, deps.transports, headerCtx),

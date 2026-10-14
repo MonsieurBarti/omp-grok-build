@@ -25,6 +25,26 @@ describe("no API-key fallback", () => {
 			headerCtx: { version: "1.2.3", platform: "linux", arch: "x64" },
 		});
 		assert.equal(providerHasNoApiKeyFallback(config), true);
+		assert.deepEqual(
+			config.models.map(model => model.id),
+			[
+				"grok-4.7",
+				"grok-4.7-build-fast",
+				"grok-4.6",
+				"grok-4.5",
+				"grok-4.3",
+				"grok-4.20-multi-agent-0309",
+				"grok-4.20-0309-reasoning",
+				"grok-4.20-0309-non-reasoning",
+				"grok-build",
+				"grok-composer-2.5-fast",
+			],
+		);
+		for (const model of config.models) {
+			assert.equal("contextWindow" in model, false, model.id);
+			assert.equal("thinking" in model, false, model.id);
+		}
+		assert.equal(typeof config.fetchDynamicModels, "function");
 		assert.equal("apiKey" in config, false);
 		assert.equal(config.baseUrl, GROK_BUILD_BASE_URL);
 		assert.equal(JSON.stringify(config.headers).includes("api.x.ai"), false);

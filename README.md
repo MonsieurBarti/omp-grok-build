@@ -67,6 +67,8 @@ modelRoles:
 
 ## Models
 
+The curated ids are registered when the extension loads, so `retry.fallbackChains` can name `grok-build/grok-4.7` (and `grok-build/grok-4.7:high`) before live discovery finishes. Limits and thinking still come from the table and from `/v1/models`.
+
 Signed out, or if `/v1/models` fails, the picker shows the table in `src/model-metadata.ts`. Signed in, omp calls `fetchDynamicModels` (its usual ~24h cache; `omp models refresh` forces it). The curated rows stay. A live id updates the matching row and unknown ids are appended.
 
 1. Exact table row, else a family prefix (`grok-4.7-nightly` follows `grok-4.7`), else conservative defaults.
