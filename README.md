@@ -24,7 +24,7 @@ Local checkout:
 omp plugin link .
 ```
 
-The entry is `package.json#omp.extensions` (`./src/index.ts`). omp loads that file. `@oh-my-pi/pi-ai` and `@oh-my-pi/pi-coding-agent` come from omp; they are optional peer dependencies so this repo's tests can run without them.
+The entry is `package.json#omp.extensions` (`./src/index.ts`). omp loads that file and rewrites the static `@oh-my-pi/pi-ai/providers/openai-responses` and `openai-completions` imports onto the host transports. Those imports have to be static literals; a runtime `import()` is not rewritten and cannot see the host packages from `~/.omp/plugins/node_modules`.
 
 Do not set `providers.grok-build.apiKey` in `models.yml`. An api key there is the API-quota credential. This plugin will refuse a value that is `XAI_API_KEY` or an `xai-…` API key, and it will not send traffic to `api.x.ai`.
 

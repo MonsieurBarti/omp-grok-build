@@ -118,30 +118,3 @@ export function streamGrokBuild(
 }
 
 export const STREAM_API = GROK_BUILD_API;
-
-const RESPONSE_EXPORTS = ["streamOpenAIResponses", "streamSimpleOpenAIResponses"];
-const COMPLETION_EXPORTS = [
-	"streamSimpleOpenAICompletions",
-	"streamOpenAICompletions",
-	"streamSimpleCompletions",
-];
-
-export async function loadWireTransports(): Promise<Transports> {
-	const responses = await loadExport("@oh-my-pi/pi-ai/providers/openai-responses", RESPONSE_EXPORTS);
-	const completions = await loadExport(
-		"@oh-my-pi/pi-ai/providers/openai-completions",
-		COMPLETION_EXPORTS,
-	);
-	return { responses, completions };
-}
-
-async function loadExport(specifier: string, names: string[]): Promise<WireTransport> {
-	const imported = (await import(specifier)) as Record<string, unknown>;
-	for (const name of names) {
-		const value = imported[name];
-		if (typeof value === "function") return value as WireTransport;
-	}
-	throw new Error(
-		`grok-build could not find ${names.join(" or ")} in ${specifier}. Exports: ${Object.keys(imported).join(", ")}`,
-	);
-}

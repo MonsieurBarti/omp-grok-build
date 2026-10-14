@@ -1,7 +1,10 @@
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+
 import { PROVIDER_ID } from "./constants.ts";
 import { createGrokBuildProviderConfig } from "./provider.ts";
+import type { Transports } from "./stream.ts";
 import { fetchGrokBuildUsage } from "./usage.ts";
-import { loadWireTransports } from "./stream.ts";
 
 interface ExtensionUi {
 	notify(message: string, level?: string): void;
@@ -25,11 +28,21 @@ interface ExtensionApi {
 }
 
 /**
+ * Host transports. These specifiers must stay static string literals.
+ * omp's extension loader rewrites `@oh-my-pi/pi-ai/...` onto the in-process
+ * copy before the module runs. A runtime `import(specifier)` is invisible to
+ * that rewrite and fails from `~/.omp/plugins/node_modules`, where the host
+ * packages are not installed.
+ */
+const transports: Transports = {
+	responses: (model, context, options) => streamOpenAIResponses(model as never, context as never, options),
+	completions: (model, context, options) => streamOpenAICompletions(model as never, context as never, options),
+};
+
+/**
  * omp extension entry (`package.json#omp.extensions`).
- * Loaded by omp, which provides `@oh-my-pi/pi-ai`.
  */
 export default async function grokBuildExtension(pi: ExtensionApi): Promise<void> {
-	const transports = await loadWireTransports();
 	const config = createGrokBuildProviderConfig({ transports });
 	pi.setLabel("Grok Build");
 	pi.registerProvider(PROVIDER_ID, config);
