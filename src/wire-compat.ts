@@ -16,7 +16,7 @@
 
 export const STREAM_FIRST_EVENT_TIMEOUT_MS = 60_000;
 export const STREAM_IDLE_TIMEOUT_MS = 90_000;
-export const REQUEST_TIMEOUT_MS = 120_000;
+export const REQUEST_TIMEOUT_MS = 0;
 
 export interface ResponsesCompat {
 	supportsDeveloperRole: boolean;
